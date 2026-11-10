@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>수강신청 연습</title>
+</head>
+<body>
+  <h1>수강신청 연습 사이트</h1>
+  <button id="health-btn">서버 상태 확인</button>
+  <pre id="health-result"></pre>
+
+  <script>
+    var button = document.getElementById("health-btn");
+    var output = document.getElementById("health-result");
+
+    button.addEventListener("click", function () {
+      fetch("/api/health")
+        .then(function (response) {
+          return response.json();
+        })
+        .then(function (data) {
+          output.textContent = JSON.stringify(data, null, 2);
+        })
+        .catch(function (error) {
+          output.textContent = "요청 실패: " + error;
+        });
+    });
+  </script>
+</body>
+</html>
