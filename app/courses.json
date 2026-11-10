@@ -1,0 +1,22 @@
+[
+  {"id": "CS101", "name": "웹프로그래밍", "credit": 3, "capacity": 30, "times": [{"day": "월", "start": 1, "end": 2}, {"day": "수", "start": 1, "end": 1}]},
+  {"id": "CS102", "name": "자료구조", "credit": 3, "capacity": 30, "times": [{"day": "화", "start": 3, "end": 4}, {"day": "목", "start": 3, "end": 3}]},
+  {"id": "CS103", "name": "운영체제", "credit": 3, "capacity": 25, "times": [{"day": "월", "start": 3, "end": 4}, {"day": "수", "start": 3, "end": 3}]},
+  {"id": "CS104", "name": "데이터베이스", "credit": 3, "capacity": 30, "times": [{"day": "화", "start": 1, "end": 2}, {"day": "목", "start": 1, "end": 1}]},
+  {"id": "CS105", "name": "컴퓨터네트워크", "credit": 3, "capacity": 30, "times": [{"day": "수", "start": 5, "end": 6}, {"day": "금", "start": 5, "end": 5}]},
+  {"id": "CS106", "name": "클라우드컴퓨팅", "credit": 3, "capacity": 20, "times": [{"day": "목", "start": 5, "end": 7}]},
+  {"id": "CS107", "name": "인공지능기초", "credit": 3, "capacity": 5, "times": [{"day": "월", "start": 5, "end": 6}, {"day": "수", "start": 5, "end": 5}]},
+  {"id": "CS108", "name": "머신러닝", "credit": 3, "capacity": 15, "times": [{"day": "화", "start": 5, "end": 7}]},
+  {"id": "CS109", "name": "소프트웨어공학", "credit": 3, "capacity": 30, "times": [{"day": "금", "start": 1, "end": 3}]},
+  {"id": "CS110", "name": "모바일프로그래밍", "credit": 3, "capacity": 25, "times": [{"day": "월", "start": 7, "end": 9}]},
+  {"id": "CS111", "name": "알고리즘", "credit": 3, "capacity": 30, "times": [{"day": "화", "start": 3, "end": 4}, {"day": "목", "start": 4, "end": 4}]},
+  {"id": "CS112", "name": "정보보안", "credit": 3, "capacity": 25, "times": [{"day": "수", "start": 7, "end": 9}]},
+  {"id": "CS113", "name": "컴퓨터그래픽스", "credit": 3, "capacity": 20, "times": [{"day": "목", "start": 1, "end": 3}]},
+  {"id": "CS114", "name": "캡스톤디자인", "credit": 3, "capacity": 40, "times": [{"day": "금", "start": 5, "end": 7}]},
+  {"id": "CS115", "name": "리눅스시스템", "credit": 2, "capacity": 20, "times": [{"day": "화", "start": 8, "end": 9}]},
+  {"id": "CS116", "name": "통계학", "credit": 3, "capacity": 30, "times": [{"day": "월", "start": 1, "end": 2}, {"day": "수", "start": 2, "end": 2}]},
+  {"id": "CS117", "name": "게임프로그래밍", "credit": 3, "capacity": 20, "times": [{"day": "금", "start": 1, "end": 3}]},
+  {"id": "CS118", "name": "빅데이터분석", "credit": 3, "capacity": 20, "times": [{"day": "화", "start": 1, "end": 1}, {"day": "목", "start": 8, "end": 9}]},
+  {"id": "CS119", "name": "오픈소스SW", "credit": 2, "capacity": 25, "times": [{"day": "수", "start": 1, "end": 2}]},
+  {"id": "CS120", "name": "영어회화", "credit": 2, "capacity": 30, "times": [{"day": "화", "start": 5, "end": 6}]}
+]
