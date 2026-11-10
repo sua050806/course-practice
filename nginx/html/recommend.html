@@ -10,6 +10,7 @@
     .message { margin: 12px 0; font-weight: bold; }
     .error { color: #c0392b; }
     .combination { border: 1px solid #ccc; border-radius: 8px; padding: 12px; margin-bottom: 16px; }
+    .add-result { font-size: 14px; margin-top: 8px; }
     table { border-collapse: collapse; width: 100%; margin-top: 8px; }
     th, td { border: 1px solid #ddd; text-align: center; padding: 4px; font-size: 13px; height: 28px; }
     td.filled { background: #dbe8ff; }
@@ -17,7 +18,8 @@
 </head>
 <body>
   <h1>시간표 추천</h1>
-  <a href="index.html">처음으로</a>
+  <!-- 현재 닉네임 표시 -->
+  <p>닉네임: <strong id="nickname-label"></strong> · <a href="index.html">닉네임 변경</a> · <a href="cart.html">장바구니 보기</a></p>
 
   <!-- 추천 조건 입력 -->
   <fieldset>
@@ -48,6 +50,27 @@
   <script>
     var DAYS = ["월", "화", "수", "목", "금"];
     var MAX_PERIOD = 9;
+    var NICKNAME_KEY = "nickname";
+
+    // 저장된 닉네임 읽기 (없으면 빈 문자열)
+    function loadNickname() {
+      try {
+        var saved = localStorage.getItem(NICKNAME_KEY);
+        if (saved === null) {
+          return "";
+        }
+        return saved;
+      } catch (error) {
+        return "";
+      }
+    }
+
+    // 닉네임이 없으면 입장 화면으로 돌려보냄
+    var nickname = loadNickname();
+    if (nickname === "") {
+      window.location.href = "index.html";
+    }
+    document.getElementById("nickname-label").textContent = nickname;
 
     // 체크된 공강 요일만 배열로 모음
     function getCheckedOffDays() {
@@ -111,6 +134,47 @@
       return table;
     }
 
+    // 조합의 과목을 하나씩 순서대로 장바구니에 담음
+    // 한 과목이 실패해도(시간 겹침, 이미 담음 등) 나머지 과목은 계속 시도
+    function addCombinationToCart(courses, resultArea) {
+      var lines = [];
+
+      // index번째 과목을 담고, 끝나면 다음 과목으로 넘어감
+      function addNext(index) {
+        if (index >= courses.length) {
+          resultArea.innerHTML = lines.join("<br>");
+          return;
+        }
+
+        var course = courses[index];
+        fetch("/api/cart", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ nickname: nickname, courseId: course.id })
+        })
+          .then(function (response) {
+            return response.json().then(function (data) {
+              return { ok: response.ok, data: data };
+            });
+          })
+          .then(function (result) {
+            if (result.ok) {
+              lines.push("✔ " + course.name + ": 담았습니다.");
+            } else {
+              lines.push("✖ " + course.name + ": " + result.data.message);
+            }
+            addNext(index + 1);
+          })
+          .catch(function (error) {
+            lines.push("✖ " + course.name + ": 서버에 연결할 수 없습니다.");
+            addNext(index + 1);
+          });
+      }
+
+      resultArea.textContent = "담는 중...";
+      addNext(0);
+    }
+
     // 추천 결과 전체를 화면에 표시
     function renderResult(data) {
       var resultArea = document.getElementById("result");
@@ -138,8 +202,28 @@
 
         // 시간표 표
         box.appendChild(createTimetable(combination.courses));
+
+        // 장바구니 담기 버튼과 결과 표시 영역
+        var addButton = document.createElement("button");
+        addButton.textContent = "이 조합 장바구니에 담기";
+        var addResult = document.createElement("div");
+        addResult.className = "add-result";
+
+        // 반복문 안에서 버튼마다 자기 조합을 기억하도록 함수로 감싸서 연결
+        addButton.addEventListener("click", makeAddHandler(combination.courses, addResult));
+
+        box.appendChild(addButton);
+        box.appendChild(addResult);
         resultArea.appendChild(box);
       }
+    }
+
+    // 버튼 클릭 시 실행할 함수를 만들어 반환
+    // var는 반복문 바깥까지 공유되므로, 이렇게 감싸지 않으면 모든 버튼이 마지막 조합을 담게 됨
+    function makeAddHandler(courses, resultArea) {
+      return function () {
+        addCombinationToCart(courses, resultArea);
+      };
     }
 
     // 메시지 표시 (오류면 빨간색)

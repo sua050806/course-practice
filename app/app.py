@@ -27,6 +27,10 @@ MIN_TARGET_CREDIT = 2       # 추천 가능한 최소 학점
 MAX_TARGET_CREDIT = 21      # 추천 가능한 최대 학점
 MAX_RECOMMEND_COUNT = 3     # 한 번에 돌려줄 조합 개수
 
+# 장바구니에 쓰는 상수
+MAX_CART_CREDIT = 21        # 장바구니에 담을 수 있는 최대 학점
+NICKNAME_MAX_LENGTH = 10    # 닉네임 최대 글자 수
+
 
 def load_courses():
     # 과목 정보(이름, 학점, 시간, 정원)를 파일에서 읽어옴
@@ -40,6 +44,12 @@ def load_courses():
 # 서버가 시작될 때 과목 목록을 메모리에 올려둠
 # 워커마다 따로 읽지만 내용이 같아서 공유할 필요 없음
 courses = load_courses()
+
+# 과목 ID로 과목을 바로 찾기 위한 딕셔너리
+# 예: courses_by_id["CS101"] → 웹프로그래밍 과목 정보
+courses_by_id = {}
+for course_item in courses:
+    courses_by_id[course_item["id"]] = course_item
 
 
 def get_remaining(course):
@@ -143,6 +153,52 @@ def make_error(message, status_code):
     return jsonify(body), status_code
 
 
+def read_nickname(value):
+    # 닉네임을 검사해서 올바르면 앞뒤 공백을 지운 닉네임을, 아니면 None을 반환
+    if not isinstance(value, str):
+        return None
+    nickname = value.strip()
+    if len(nickname) == 0:
+        return None
+    if len(nickname) > NICKNAME_MAX_LENGTH:
+        return None
+    return nickname
+
+
+def get_cart_key(nickname):
+    # 장바구니를 저장하는 Redis 키 이름
+    # 예: cart:수아
+    return "cart:" + nickname
+
+
+def get_cart_courses(nickname):
+    # 장바구니에 담긴 과목들을 과목 정보 목록으로 반환
+    # smembers: Set에 들어 있는 값 전체를 가져오는 명령
+    course_ids = redis_client.smembers(get_cart_key(nickname))
+
+    # courses.json 순서대로 정렬되도록 전체 과목을 돌면서 장바구니에 있는 것만 고름
+    result = []
+    for course in courses:
+        if course["id"] in course_ids:
+            result.append(course)
+    return result
+
+
+def make_cart_response(nickname, message):
+    # 장바구니 상태(과목 목록, 총 학점)를 응답 형식으로 만듦
+    cart_courses = get_cart_courses(nickname)
+
+    body = {}
+    body["nickname"] = nickname
+    body["totalCredit"] = 0
+    body["courses"] = []
+    for course in cart_courses:
+        body["courses"].append(make_course_summary(course))
+        body["totalCredit"] = body["totalCredit"] + course["credit"]
+    body["message"] = message
+    return jsonify(body)
+
+
 @app.route("/api/health")
 def health():
     # 서버 상태 확인용 API
@@ -241,3 +297,94 @@ def recommend():
         result["message"] = "추천 시간표 " + str(len(found_combinations)) + "개를 찾았습니다."
 
     return jsonify(result)
+
+
+@app.route("/api/cart", methods=["GET"])
+def cart_get():
+    # 장바구니 조회 API
+    # 요청 예시: GET /api/cart?nickname=수아
+    nickname = read_nickname(request.args.get("nickname"))
+    if nickname is None:
+        return make_error("닉네임은 1자 이상 10자 이하로 입력해야 합니다.", 400)
+
+    return make_cart_response(nickname, "장바구니를 불러왔습니다.")
+
+
+@app.route("/api/cart", methods=["POST"])
+def cart_add():
+    # 장바구니 담기 API
+    # 요청 예시: {"nickname": "수아", "courseId": "CS101"}
+
+    # 1. 요청 본문 읽기
+    data = request.get_json(silent=True)
+    if data is None:
+        return make_error("요청 형식이 올바르지 않습니다.", 400)
+
+    # 2. 닉네임 검사
+    nickname = read_nickname(data.get("nickname"))
+    if nickname is None:
+        return make_error("닉네임은 1자 이상 10자 이하로 입력해야 합니다.", 400)
+
+    # 3. 과목 ID 검사 (courses.json에 없는 과목)
+    course_id = data.get("courseId")
+    if course_id not in courses_by_id:
+        return make_error("존재하지 않는 과목입니다.", 404)
+    course = courses_by_id[course_id]
+
+    cart_key = get_cart_key(nickname)
+
+    # 4. 이미 담은 과목인지 확인
+    # sismember: Set 안에 값이 있는지 확인하는 명령
+    if redis_client.sismember(cart_key, course_id):
+        return make_error("이미 장바구니에 담은 과목입니다.", 409)
+
+    # 5. 장바구니에 있는 과목들과 시간이 겹치는지 확인
+    cart_courses = get_cart_courses(nickname)
+    total_credit = 0
+    for cart_course in cart_courses:
+        total_credit = total_credit + cart_course["credit"]
+        if is_time_conflict(cart_course, course):
+            return make_error(cart_course["name"] + "과(와) 시간이 겹칩니다.", 409)
+
+    # 6. 담았을 때 최대 학점을 넘는지 확인
+    if total_credit + course["credit"] > MAX_CART_CREDIT:
+        return make_error("장바구니는 최대 21학점까지 담을 수 있습니다.", 400)
+
+    # 7. 모든 검사를 통과하면 Set에 과목 ID 추가
+    redis_client.sadd(cart_key, course_id)
+
+    return make_cart_response(nickname, course["name"] + "을(를) 장바구니에 담았습니다.")
+
+
+@app.route("/api/cart", methods=["DELETE"])
+def cart_remove():
+    # 장바구니 빼기 API
+    # 요청 예시: {"nickname": "수아", "courseId": "CS101"}
+
+    # 1. 요청 본문 읽기
+    data = request.get_json(silent=True)
+    if data is None:
+        return make_error("요청 형식이 올바르지 않습니다.", 400)
+
+    # 2. 닉네임 검사
+    nickname = read_nickname(data.get("nickname"))
+    if nickname is None:
+        return make_error("닉네임은 1자 이상 10자 이하로 입력해야 합니다.", 400)
+
+    # 3. 과목 ID 검사
+    course_id = data.get("courseId")
+    if course_id not in courses_by_id:
+        return make_error("존재하지 않는 과목입니다.", 404)
+    course = courses_by_id[course_id]
+
+    cart_key = get_cart_key(nickname)
+
+    # 4. 장바구니에 없는 과목을 빼려고 하면 거부
+    if not redis_client.sismember(cart_key, course_id):
+        return make_error("장바구니에 없는 과목입니다.", 404)
+
+    # 5. Set에서 과목 ID 제거
+    # srem: Set에서 값을 빼는 명령
+    redis_client.srem(cart_key, course_id)
+
+    return make_cart_response(nickname, course["name"] + "을(를) 장바구니에서 뺐습니다.")
