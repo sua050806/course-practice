@@ -13,6 +13,8 @@ services:
     build: ./app
     environment:
       REDIS_HOST: redis
+      # 관리자 키: .env 파일에 ADMIN_KEY=값 을 적으면 그 값을 쓰고, 없으면 admin1234
+      ADMIN_KEY: ${ADMIN_KEY:-admin1234}
     depends_on:
       - redis
 
