@@ -68,7 +68,7 @@
     // 닉네임이 없으면 입장 화면으로 돌려보냄
     var nickname = loadNickname();
     if (nickname === "") {
-      window.location.href = "index.html";
+      window.location.replace("index.html?need=nickname");
     }
     document.getElementById("nickname-label").textContent = nickname;
 

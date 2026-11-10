@@ -7,9 +7,11 @@
   <style>
     body { font-family: sans-serif; max-width: 900px; margin: 0 auto; padding: 16px; }
     fieldset { margin-bottom: 16px; }
+    fieldset:disabled { opacity: 0.5; }
     .status { font-size: 20px; font-weight: bold; margin: 8px 0; }
     .message { margin: 8px 0; }
-    .error { color: #c0392b; }
+    .error { color: #c0392b; font-weight: bold; }
+    .verified { color: #1e7b34; font-weight: bold; }
     .summary td, .summary th { border: 1px solid #ddd; padding: 6px 10px; }
     .summary { border-collapse: collapse; margin-top: 8px; }
     .bar-row { display: flex; align-items: center; margin: 4px 0; font-size: 14px; }
@@ -21,14 +23,16 @@
   <h1>관리자</h1>
   <p><a href="index.html">처음으로</a></p>
 
-  <!-- 관리자 키: 모든 관리자 요청에 함께 보냄 -->
+  <!-- 관리자 키 확인: 맞아야 아래 기능들이 열림 -->
   <fieldset>
-    <legend>관리자 키</legend>
+    <legend>관리자 인증</legend>
     <input type="password" id="admin-key" placeholder="관리자 키">
+    <button id="verify-btn">확인</button>
+    <div id="verify-message" class="message">관리자 키를 입력하고 [확인]을 눌러주세요.</div>
   </fieldset>
 
-  <!-- 신청 오픈·마감·초기화 -->
-  <fieldset>
+  <!-- 신청 오픈·마감·초기화 (인증 전에는 disabled로 잠김) -->
+  <fieldset id="manage-section" disabled>
     <legend>신청 관리</legend>
     <div id="status" class="status">상태 확인 중...</div>
     <label>오픈까지 대기 시간(초, 0~60): <input type="number" id="delay" value="10" min="0" max="60"></label>
@@ -39,8 +43,8 @@
     <div id="admin-message" class="message"></div>
   </fieldset>
 
-  <!-- 부하 테스트 -->
-  <fieldset>
+  <!-- 부하 테스트 (인증 전에는 disabled로 잠김) -->
+  <fieldset id="test-section" disabled>
     <legend>부하 테스트</legend>
     <p>가상 사용자들이 한 과목에 동시에 신청 요청을 보냅니다. 신청이 열린 상태에서 실행하세요.</p>
     <label>과목: <select id="test-course"></select></label>
@@ -55,6 +59,9 @@
   <script>
     var MAX_TEST_USERS = 300;
 
+    // 인증에 성공한 관리자 키 (인증 전이면 빈 문자열)
+    var verifiedKey = "";
+
     // 서버에 요청을 보내고 { ok, data } 형태로 결과를 돌려줌
     function sendRequest(method, url, body) {
       var options = { method: method, headers: { "Content-Type": "application/json" } };
@@ -68,8 +75,55 @@
       });
     }
 
-    function getAdminKey() {
-      return document.getElementById("admin-key").value;
+    // 관리 기능 잠금 / 해제
+    // fieldset에 disabled를 주면 그 안의 입력칸과 버튼이 모두 비활성화됨
+    function setLocked(locked) {
+      document.getElementById("manage-section").disabled = locked;
+      document.getElementById("test-section").disabled = locked;
+    }
+
+    // 인증 메시지 표시 (className으로 색상 결정)
+    function showVerifyMessage(text, className) {
+      var area = document.getElementById("verify-message");
+      area.textContent = text;
+      area.className = "message " + className;
+    }
+
+    // [확인] 버튼: 서버에 키가 맞는지 물어봄
+    function verifyAdmin() {
+      var key = document.getElementById("admin-key").value;
+
+      if (key === "") {
+        showVerifyMessage("관리자 키를 입력해주세요.", "error");
+        return;
+      }
+
+      sendRequest("POST", "/api/admin/verify", { adminKey: key })
+        .then(function (result) {
+          if (result.ok) {
+            // 맞으면 키를 기억하고 관리 기능 잠금 해제
+            verifiedKey = key;
+            setLocked(false);
+            showVerifyMessage("관리자 인증 완료", "verified");
+          } else {
+            // 틀리면 잠금 유지
+            verifiedKey = "";
+            setLocked(true);
+            showVerifyMessage(result.data.message, "error");
+          }
+        })
+        .catch(function (error) {
+          showVerifyMessage("서버에 연결할 수 없습니다: " + error, "error");
+        });
+    }
+
+    // 인증 후 키 입력칸을 고치면 다시 잠금 (다시 확인해야 함)
+    function onKeyInputChanged() {
+      if (verifiedKey !== "") {
+        verifiedKey = "";
+        setLocked(true);
+        showVerifyMessage("키가 바뀌었습니다. 다시 [확인]을 눌러주세요.", "");
+      }
     }
 
     // 메시지 표시 (오류면 빨간색)
@@ -100,7 +154,7 @@
         });
     }
 
-    // 관리자 API 공통 호출
+    // 관리자 API 공통 호출 (인증된 키를 함께 보냄)
     function callAdmin(url, body) {
       sendRequest("POST", url, body)
         .then(function (result) {
@@ -113,18 +167,18 @@
     }
 
     function openEnroll() {
-      callAdmin("/api/admin/open", { adminKey: getAdminKey(), delaySeconds: Number(document.getElementById("delay").value) });
+      callAdmin("/api/admin/open", { adminKey: verifiedKey, delaySeconds: Number(document.getElementById("delay").value) });
     }
 
     function closeEnroll() {
-      callAdmin("/api/admin/close", { adminKey: getAdminKey() });
+      callAdmin("/api/admin/close", { adminKey: verifiedKey });
     }
 
     function resetEnroll() {
       if (!confirm("모든 정원과 신청 내역을 초기화할까요?")) {
         return;
       }
-      callAdmin("/api/admin/reset", { adminKey: getAdminKey() });
+      callAdmin("/api/admin/reset", { adminKey: verifiedKey });
     }
 
     // 부하 테스트 과목 선택 목록 채우기
@@ -132,14 +186,18 @@
       sendRequest("GET", "/api/courses", null)
         .then(function (result) {
           var select = document.getElementById("test-course");
+          var selectedId = select.value;
           select.innerHTML = "";
           for (var i = 0; i < result.data.length; i++) {
             var course = result.data[i];
             var option = document.createElement("option");
             option.value = course.id;
             option.textContent = course.name + " (정원 " + course.capacity + ", 남은 자리 " + course.remaining + ")";
-            // 인기 과목(인공지능기초)을 기본 선택
-            if (course.id === "CS107") {
+            // 이전에 고른 과목을 유지하고, 처음이면 인기 과목(인공지능기초)을 선택
+            if (selectedId === "" && course.id === "CS107") {
+              option.selected = true;
+            }
+            if (selectedId === course.id) {
               option.selected = true;
             }
             select.appendChild(option);
@@ -308,6 +366,14 @@
       });
     }
 
+    document.getElementById("verify-btn").addEventListener("click", verifyAdmin);
+    document.getElementById("admin-key").addEventListener("input", onKeyInputChanged);
+    // 키 입력칸에서 Enter를 눌러도 확인되게 함
+    document.getElementById("admin-key").addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        verifyAdmin();
+      }
+    });
     document.getElementById("open-btn").addEventListener("click", openEnroll);
     document.getElementById("close-btn").addEventListener("click", closeEnroll);
     document.getElementById("reset-btn").addEventListener("click", resetEnroll);

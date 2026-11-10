@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>수강신청</title>
+  <style>
+    body { font-family: sans-serif; max-width: 900px; margin: 0 auto; padding: 16px; }
+    .status { font-size: 22px; font-weight: bold; padding: 12px; border-radius: 8px; margin: 12px 0; text-align: center; }
+    .status.closed { background: #eee; color: #555; }
+    .status.waiting { background: #fff4d6; color: #a06b00; }
+    .status.open { background: #dff5e1; color: #1e7b34; }
+    .course-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #eee; }
+    .log { font-size: 14px; background: #f7f7f7; padding: 8px; border-radius: 6px; min-height: 40px; }
+    .success { color: #1e7b34; }
+    .error { color: #c0392b; }
+    table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+    th, td { border: 1px solid #ddd; text-align: center; padding: 4px; font-size: 13px; height: 28px; }
+    td.filled { background: #dff5e1; }
+  </style>
+</head>
+<body>
+  <h1>수강신청</h1>
+  <p>닉네임: <strong id="nickname-label"></strong> · <a href="index.html">처음으로</a> · <a href="cart.html">장바구니</a></p>
+
+  <!-- 신청 상태 표시: 1초마다 갱신 -->
+  <div id="status" class="status closed">상태 확인 중...</div>
+
+  <!-- 장바구니 과목과 신청 버튼 -->
+  <h2>장바구니 과목</h2>
+  <button id="enroll-all-btn" class="enroll-btn" disabled>장바구니 전체 신청</button>
+  <div id="cart-list"></div>
+
+  <!-- 신청 결과 기록 -->
+  <h2>신청 결과</h2>
+  <div id="log" class="log"></div>
+
+  <!-- 신청 내역 -->
+  <h2>신청 내역 (<span id="enrolled-credit">0</span>학점)</h2>
+  <div id="my-timetable"></div>
+
+  <script>
+    var DAYS = ["월", "화", "수", "목", "금"];
+    var MAX_PERIOD = 9;
+    var NICKNAME_KEY = "nickname";
+
+    // 현재 신청 가능 여부 (상태 조회 결과로 갱신)
+    var isOpen = false;
+    // 장바구니 과목 목록 (전체 신청에 사용)
+    var cartCourses = [];
+
+    // 저장된 닉네임 읽기 (없으면 빈 문자열)
+    function loadNickname() {
+      try {
+        var saved = localStorage.getItem(NICKNAME_KEY);
+        if (saved === null) {
+          return "";
+        }
+        return saved;
+      } catch (error) {
+        return "";
+      }
+    }
+
+    // 닉네임이 없으면 입장 화면으로 돌려보냄
+    var nickname = loadNickname();
+    if (nickname === "") {
+      window.location.replace("index.html?need=nickname");
+    }
+    document.getElementById("nickname-label").textContent = nickname;
+
+    // 서버에 요청을 보내고 { ok, data } 형태로 결과를 돌려줌
+    function sendRequest(method, url, body) {
+      var options = { method: method, headers: { "Content-Type": "application/json" } };
+      if (body !== null) {
+        options.body = JSON.stringify(body);
+      }
+      return fetch(url, options).then(function (response) {
+        return response.json().then(function (data) {
+          return { ok: response.ok, data: data };
+        });
+      });
+    }
+
+    // 결과 기록 영역에 한 줄 추가 (최신 결과가 위로)
+    function addLog(text, isSuccess) {
+      var log = document.getElementById("log");
+      var line = document.createElement("div");
+      var now = new Date();
+      line.textContent = "[" + now.toLocaleTimeString() + "] " + text;
+      if (isSuccess) {
+        line.className = "success";
+      } else {
+        line.className = "error";
+      }
+      log.insertBefore(line, log.firstChild);
+    }
+
+    // 과목 시간을 "월1-2, 수1" 같은 글자로 바꿈
+    function formatTimes(times) {
+      var parts = [];
+      for (var i = 0; i < times.length; i++) {
+        var slot = times[i];
+        if (slot.start === slot.end) {
+          parts.push(slot.day + slot.start);
+        } else {
+          parts.push(slot.day + slot.start + "-" + slot.end);
+        }
+      }
+      return parts.join(", ");
+    }
+
+    // 특정 요일·교시에 수업이 있는 과목을 찾아 이름을 반환 (없으면 빈 문자열)
+    function findCourseName(courses, day, period) {
+      for (var i = 0; i < courses.length; i++) {
+        var times = courses[i].times;
+        for (var j = 0; j < times.length; j++) {
+          if (times[j].day === day && times[j].start <= period && period <= times[j].end) {
+            return courses[i].name;
+          }
+        }
+      }
+      return "";
+    }
+
+    // 과목 목록을 요일 x 교시 표로 그림
+    function createTimetable(courses) {
+      var table = document.createElement("table");
+
+      var headerRow = document.createElement("tr");
+      var corner = document.createElement("th");
+      corner.textContent = "교시";
+      headerRow.appendChild(corner);
+      for (var d = 0; d < DAYS.length; d++) {
+        var dayHeader = document.createElement("th");
+        dayHeader.textContent = DAYS[d];
+        headerRow.appendChild(dayHeader);
+      }
+      table.appendChild(headerRow);
+
+      for (var period = 1; period <= MAX_PERIOD; period++) {
+        var row = document.createElement("tr");
+        var periodCell = document.createElement("th");
+        periodCell.textContent = period;
+        row.appendChild(periodCell);
+
+        for (var k = 0; k < DAYS.length; k++) {
+          var cell = document.createElement("td");
+          var name = findCourseName(courses, DAYS[k], period);
+          if (name !== "") {
+            cell.textContent = name;
+            cell.className = "filled";
+          }
+          row.appendChild(cell);
+        }
+        table.appendChild(row);
+      }
+      return table;
+    }
+
+    // 신청 버튼들의 활성 상태를 오픈 여부에 맞춤
+    function updateButtons() {
+      var buttons = document.querySelectorAll(".enroll-btn");
+      for (var i = 0; i < buttons.length; i++) {
+        buttons[i].disabled = !isOpen;
+      }
+    }
+
+    // 신청 상태 조회 → 상태 표시와 버튼 갱신
+    function loadStatus() {
+      sendRequest("GET", "/api/status", null)
+        .then(function (result) {
+          var statusBox = document.getElementById("status");
+          var data = result.data;
+
+          if (data.state === "open") {
+            statusBox.textContent = "신청 가능!";
+            statusBox.className = "status open";
+            isOpen = true;
+          } else if (data.state === "waiting") {
+            statusBox.textContent = "오픈까지 " + data.remainingSeconds + "초";
+            statusBox.className = "status waiting";
+            isOpen = false;
+          } else {
+            statusBox.textContent = "신청 기간이 아닙니다";
+            statusBox.className = "status closed";
+            isOpen = false;
+          }
+          updateButtons();
+        })
+        .catch(function (error) {
+          document.getElementById("status").textContent = "서버에 연결할 수 없습니다";
+        });
+    }
+
+    // 장바구니 과목 목록을 신청 버튼과 함께 그림
+    function renderCart(courses) {
+      cartCourses = courses;
+      var listArea = document.getElementById("cart-list");
+      listArea.innerHTML = "";
+
+      if (courses.length === 0) {
+        listArea.innerHTML = "장바구니가 비어 있습니다. <a href=\"recommend.html\">시간표 추천</a>이나 <a href=\"cart.html\">장바구니</a>에서 과목을 담아주세요.";
+        return;
+      }
+
+      for (var i = 0; i < courses.length; i++) {
+        var course = courses[i];
+        var row = document.createElement("div");
+        row.className = "course-row";
+
+        var label = document.createElement("span");
+        label.textContent = course.name + " (" + course.credit + "학점, " + formatTimes(course.times) + ")";
+        row.appendChild(label);
+
+        var button = document.createElement("button");
+        button.textContent = "신청";
+        button.className = "enroll-btn";
+        button.disabled = !isOpen;
+        button.addEventListener("click", makeEnrollHandler(course));
+        row.appendChild(button);
+
+        listArea.appendChild(row);
+      }
+    }
+
+    // 장바구니 조회
+    function loadCart() {
+      sendRequest("GET", "/api/cart?nickname=" + encodeURIComponent(nickname), null)
+        .then(function (result) {
+          if (result.ok) {
+            renderCart(result.data.courses);
+          }
+        });
+    }
+
+    // 신청 내역 조회 → 시간표 표시
+    function loadMyEnrollments() {
+      sendRequest("GET", "/api/my?nickname=" + encodeURIComponent(nickname), null)
+        .then(function (result) {
+          if (!result.ok) {
+            return;
+          }
+          document.getElementById("enrolled-credit").textContent = result.data.totalCredit;
+          var area = document.getElementById("my-timetable");
+          area.innerHTML = "";
+          area.appendChild(createTimetable(result.data.courses));
+        });
+    }
+
+    // 과목 하나 신청 → 결과를 Promise로 돌려줌 (전체 신청에서 순서대로 쓰기 위해)
+    function enrollCourse(course) {
+      var startTime = performance.now();
+      return sendRequest("POST", "/api/enroll", { nickname: nickname, courseId: course.id })
+        .then(function (result) {
+          // 응답 시간(ms)과 처리한 워커 번호를 함께 표시
+          var elapsed = Math.round(performance.now() - startTime);
+          addLog(course.name + ": " + result.data.message + " (" + elapsed + "ms, 워커 " + result.data.workerPid + ")", result.ok);
+          if (result.ok) {
+            loadMyEnrollments();
+          }
+        })
+        .catch(function (error) {
+          addLog(course.name + ": 서버에 연결할 수 없습니다.", false);
+        });
+    }
+
+    // 반복문 안에서 버튼마다 자기 과목을 기억하도록 함수로 감싸서 반환
+    function makeEnrollHandler(course) {
+      return function () {
+        enrollCourse(course);
+      };
+    }
+
+    // 장바구니 전체 신청: 과목을 하나씩 순서대로 신청
+    function enrollAll() {
+      var index = 0;
+
+      function next() {
+        if (index >= cartCourses.length) {
+          return;
+        }
+        var course = cartCourses[index];
+        index = index + 1;
+        enrollCourse(course).then(next);
+      }
+
+      next();
+    }
+
+    document.getElementById("enroll-all-btn").addEventListener("click", enrollAll);
+
+    // 화면이 열리면 상태·장바구니·신청 내역을 불러오고, 상태는 1초마다 갱신
+    loadStatus();
+    loadCart();
+    loadMyEnrollments();
+    setInterval(loadStatus, 1000);
+  </script>
+</body>
+</html>

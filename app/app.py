@@ -618,6 +618,17 @@ def admin_close():
     return make_admin_response("신청을 마감했습니다.")
 
 
+@app.route("/api/admin/verify", methods=["POST"])
+def admin_verify():
+    # 관리자: 키가 맞는지만 확인 (아무것도 바꾸지 않음)
+    # 관리자 화면에서 [확인]을 누르면 호출해서, 맞으면 관리 기능 잠금을 해제함
+    # 요청 예시: {"adminKey": "admin1234"}
+    data = request.get_json(silent=True)
+    if not is_admin(data):
+        return make_error("관리자 키가 올바르지 않습니다.", 403)
+
+    return make_admin_response("관리자 인증 완료")
+
 @app.route("/api/admin/reset", methods=["POST"])
 def admin_reset():
     # 관리자: 연습을 처음부터 다시 할 수 있도록 초기화
