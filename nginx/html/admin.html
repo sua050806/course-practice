@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>관리자</title>
+  <style>
+    body { font-family: sans-serif; max-width: 900px; margin: 0 auto; padding: 16px; }
+    fieldset { margin-bottom: 16px; }
+    .status { font-size: 20px; font-weight: bold; margin: 8px 0; }
+    .message { margin: 8px 0; }
+    .error { color: #c0392b; }
+    .summary td, .summary th { border: 1px solid #ddd; padding: 6px 10px; }
+    .summary { border-collapse: collapse; margin-top: 8px; }
+    .bar-row { display: flex; align-items: center; margin: 4px 0; font-size: 14px; }
+    .bar-label { width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bar { height: 18px; background: #4a7bd1; margin: 0 8px; }
+  </style>
+</head>
+<body>
+  <h1>관리자</h1>
+  <p><a href="index.html">처음으로</a></p>
+
+  <!-- 관리자 키: 모든 관리자 요청에 함께 보냄 -->
+  <fieldset>
+    <legend>관리자 키</legend>
+    <input type="password" id="admin-key" placeholder="관리자 키">
+  </fieldset>
+
+  <!-- 신청 오픈·마감·초기화 -->
+  <fieldset>
+    <legend>신청 관리</legend>
+    <div id="status" class="status">상태 확인 중...</div>
+    <label>오픈까지 대기 시간(초, 0~60): <input type="number" id="delay" value="10" min="0" max="60"></label>
+    <br><br>
+    <button id="open-btn">오픈</button>
+    <button id="close-btn">마감</button>
+    <button id="reset-btn">초기화 (정원·신청 내역)</button>
+    <div id="admin-message" class="message"></div>
+  </fieldset>
+
+  <!-- 부하 테스트 -->
+  <fieldset>
+    <legend>부하 테스트</legend>
+    <p>가상 사용자들이 한 과목에 동시에 신청 요청을 보냅니다. 신청이 열린 상태에서 실행하세요.</p>
+    <label>과목: <select id="test-course"></select></label>
+    <br><br>
+    <label>가상 사용자 수(1~300): <input type="number" id="user-count" value="100" min="1" max="300"></label>
+    <br><br>
+    <button id="test-btn">부하 테스트 시작</button>
+    <div id="test-message" class="message"></div>
+    <div id="test-result"></div>
+  </fieldset>
+
+  <script>
+    var MAX_TEST_USERS = 300;
+
+    // 서버에 요청을 보내고 { ok, data } 형태로 결과를 돌려줌
+    function sendRequest(method, url, body) {
+      var options = { method: method, headers: { "Content-Type": "application/json" } };
+      if (body !== null) {
+        options.body = JSON.stringify(body);
+      }
+      return fetch(url, options).then(function (response) {
+        return response.json().then(function (data) {
+          return { ok: response.ok, data: data };
+        });
+      });
+    }
+
+    function getAdminKey() {
+      return document.getElementById("admin-key").value;
+    }
+
+    // 메시지 표시 (오류면 빨간색)
+    function showMessage(elementId, text, isError) {
+      var area = document.getElementById(elementId);
+      area.textContent = text;
+      if (isError) {
+        area.className = "message error";
+      } else {
+        area.className = "message";
+      }
+    }
+
+    // 신청 상태 표시 (1초마다 갱신)
+    function loadStatus() {
+      sendRequest("GET", "/api/status", null)
+        .then(function (result) {
+          var data = result.data;
+          var text = "";
+          if (data.state === "open") {
+            text = "현재 상태: 신청 가능";
+          } else if (data.state === "waiting") {
+            text = "현재 상태: 오픈까지 " + data.remainingSeconds + "초";
+          } else {
+            text = "현재 상태: 마감";
+          }
+          document.getElementById("status").textContent = text;
+        });
+    }
+
+    // 관리자 API 공통 호출
+    function callAdmin(url, body) {
+      sendRequest("POST", url, body)
+        .then(function (result) {
+          showMessage("admin-message", result.data.message, !result.ok);
+          loadStatus();
+        })
+        .catch(function (error) {
+          showMessage("admin-message", "서버에 연결할 수 없습니다: " + error, true);
+        });
+    }
+
+    function openEnroll() {
+      callAdmin("/api/admin/open", { adminKey: getAdminKey(), delaySeconds: Number(document.getElementById("delay").value) });
+    }
+
+    function closeEnroll() {
+      callAdmin("/api/admin/close", { adminKey: getAdminKey() });
+    }
+
+    function resetEnroll() {
+      if (!confirm("모든 정원과 신청 내역을 초기화할까요?")) {
+        return;
+      }
+      callAdmin("/api/admin/reset", { adminKey: getAdminKey() });
+    }
+
+    // 부하 테스트 과목 선택 목록 채우기
+    function loadCourseOptions() {
+      sendRequest("GET", "/api/courses", null)
+        .then(function (result) {
+          var select = document.getElementById("test-course");
+          select.innerHTML = "";
+          for (var i = 0; i < result.data.length; i++) {
+            var course = result.data[i];
+            var option = document.createElement("option");
+            option.value = course.id;
+            option.textContent = course.name + " (정원 " + course.capacity + ", 남은 자리 " + course.remaining + ")";
+            // 인기 과목(인공지능기초)을 기본 선택
+            if (course.id === "CS107") {
+              option.selected = true;
+            }
+            select.appendChild(option);
+          }
+        });
+    }
+
+    // 가상 사용자 한 명의 신청 요청 → { result, server, workerPid, elapsed } 반환
+    function sendVirtualEnroll(nickname, courseId) {
+      var startTime = performance.now();
+      return sendRequest("POST", "/api/enroll", { nickname: nickname, courseId: courseId })
+        .then(function (response) {
+          var item = {};
+          item.result = response.data.result;
+          item.server = response.data.server;
+          item.workerPid = response.data.workerPid;
+          item.elapsed = performance.now() - startTime;
+          return item;
+        })
+        .catch(function (error) {
+          // 연결 실패도 결과로 집계
+          var item = {};
+          item.result = "network_error";
+          item.server = "-";
+          item.workerPid = "-";
+          item.elapsed = performance.now() - startTime;
+          return item;
+        });
+    }
+
+    // 결과별 개수를 표로 그림
+    function createSummaryTable(counts, total, averageMs, maxMs, totalMs) {
+      var labels = {
+        success: "성공",
+        full: "정원 마감",
+        not_open: "오픈 전",
+        duplicate: "중복 신청",
+        conflict: "시간 겹침",
+        credit_over: "학점 초과",
+        invalid: "잘못된 요청",
+        network_error: "연결 실패"
+      };
+
+      var table = document.createElement("table");
+      table.className = "summary";
+
+      var rows = [];
+      rows.push(["전체 요청", total + "건"]);
+      for (var key in counts) {
+        var label = key;
+        if (labels[key] !== undefined) {
+          label = labels[key];
+        }
+        rows.push([label, counts[key] + "건"]);
+      }
+      rows.push(["평균 응답 시간", Math.round(averageMs) + "ms"]);
+      rows.push(["최대 응답 시간", Math.round(maxMs) + "ms"]);
+      rows.push(["전체 소요 시간", Math.round(totalMs) + "ms"]);
+
+      for (var i = 0; i < rows.length; i++) {
+        var tr = document.createElement("tr");
+        var th = document.createElement("th");
+        th.textContent = rows[i][0];
+        var td = document.createElement("td");
+        td.textContent = rows[i][1];
+        tr.appendChild(th);
+        tr.appendChild(td);
+        table.appendChild(tr);
+      }
+      return table;
+    }
+
+    // 처리 위치(서버 / 워커)별 개수를 막대로 그림
+    function createDistribution(distribution, total) {
+      var box = document.createElement("div");
+      var title = document.createElement("h3");
+      title.textContent = "요청을 처리한 위치 (서버 / 워커)";
+      box.appendChild(title);
+
+      for (var key in distribution) {
+        var count = distribution[key];
+        var row = document.createElement("div");
+        row.className = "bar-row";
+
+        var label = document.createElement("span");
+        label.className = "bar-label";
+        label.textContent = key;
+        row.appendChild(label);
+
+        // 막대 길이: 전체 요청 대비 비율 (최대 300px)
+        var bar = document.createElement("div");
+        bar.className = "bar";
+        bar.style.width = Math.round((count / total) * 300) + "px";
+        row.appendChild(bar);
+
+        var countText = document.createElement("span");
+        countText.textContent = count + "건";
+        row.appendChild(countText);
+
+        box.appendChild(row);
+      }
+      return box;
+    }
+
+    // 부하 테스트 실행
+    function runLoadTest() {
+      var courseId = document.getElementById("test-course").value;
+      var userCount = Number(document.getElementById("user-count").value);
+
+      if (!(userCount >= 1 && userCount <= MAX_TEST_USERS)) {
+        showMessage("test-message", "가상 사용자 수는 1명 이상 300명 이하로 입력해주세요.", true);
+        return;
+      }
+
+      // 테스트마다 다른 닉네임을 쓰기 위한 번호 (예: t512-37)
+      var runId = Math.floor(Math.random() * 1000);
+      showMessage("test-message", "가상 사용자 " + userCount + "명이 신청 중...", false);
+      document.getElementById("test-result").innerHTML = "";
+
+      // 요청을 기다리지 않고 한꺼번에 보냄 → 서버에 요청이 몰림
+      var requests = [];
+      var testStart = performance.now();
+      for (var i = 1; i <= userCount; i++) {
+        var nickname = "t" + runId + "-" + i;
+        requests.push(sendVirtualEnroll(nickname, courseId));
+      }
+
+      // 모든 응답이 도착하면 집계
+      Promise.all(requests).then(function (items) {
+        var totalMs = performance.now() - testStart;
+        var counts = {};
+        var distribution = {};
+        var elapsedSum = 0;
+        var maxMs = 0;
+
+        for (var j = 0; j < items.length; j++) {
+          var item = items[j];
+
+          // 결과별 개수
+          if (counts[item.result] === undefined) {
+            counts[item.result] = 0;
+          }
+          counts[item.result] = counts[item.result] + 1;
+
+          // 처리 위치별 개수
+          var place = item.server + " / 워커 " + item.workerPid;
+          if (distribution[place] === undefined) {
+            distribution[place] = 0;
+          }
+          distribution[place] = distribution[place] + 1;
+
+          // 응답 시간
+          elapsedSum = elapsedSum + item.elapsed;
+          if (item.elapsed > maxMs) {
+            maxMs = item.elapsed;
+          }
+        }
+
+        var resultArea = document.getElementById("test-result");
+        resultArea.appendChild(createSummaryTable(counts, items.length, elapsedSum / items.length, maxMs, totalMs));
+        resultArea.appendChild(createDistribution(distribution, items.length));
+        showMessage("test-message", "부하 테스트가 끝났습니다.", false);
+
+        // 남은 자리 갱신
+        loadCourseOptions();
+      });
+    }
+
+    document.getElementById("open-btn").addEventListener("click", openEnroll);
+    document.getElementById("close-btn").addEventListener("click", closeEnroll);
+    document.getElementById("reset-btn").addEventListener("click", resetEnroll);
+    document.getElementById("test-btn").addEventListener("click", runLoadTest);
+
+    loadStatus();
+    loadCourseOptions();
+    setInterval(loadStatus, 1000);
+  </script>
+</body>
+</html>

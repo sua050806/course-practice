@@ -6,22 +6,33 @@
   <title>수강신청 연습</title>
   <style>
     body { font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 16px; }
-    .error { color: #c0392b; }
+    .error { color: #c0392b; font-weight: bold; }
+    .notice { background: #fff4d6; color: #a06b00; padding: 10px; border-radius: 6px; font-weight: bold; }
+    .hidden { display: none; }
   </style>
 </head>
 <body>
   <h1>수강신청 연습 사이트</h1>
 
+  <!-- 닉네임 없이 다른 화면에 들어왔다가 돌아온 경우 보여줄 안내 -->
+  <p id="need-notice" class="notice hidden">닉네임을 먼저 입력해야 이용할 수 있습니다.</p>
+
   <!-- 닉네임 입력: 로그인 대신 닉네임으로 사용자를 구분 -->
   <h2>입장하기</h2>
+  <p>현재 닉네임: <strong id="current-nickname">없음</strong></p>
   <input type="text" id="nickname" maxlength="10" placeholder="닉네임 (1~10자)">
   <button id="enter-btn">입장</button>
   <p id="enter-message"></p>
 
   <!-- 입장 후 이동할 화면 -->
+  <!-- need-nickname 클래스가 붙은 링크는 닉네임이 없으면 이동을 막음 -->
   <h2>메뉴</h2>
-  <p><a href="recommend.html">시간표 추천받기</a></p>
-  <p><a href="cart.html">장바구니</a></p>
+  <p><a href="recommend.html" class="need-nickname">시간표 추천받기</a></p>
+  <p><a href="cart.html" class="need-nickname">장바구니</a></p>
+  <p><a href="enroll.html" class="need-nickname">수강신청</a></p>
+  <!-- 관리자 화면은 관리자 키를 쓰므로 닉네임 없이 들어갈 수 있음 -->
+  <p><a href="admin.html">관리자</a></p>
+  <p id="menu-message" class="error"></p>
 
   <!-- 서버·Redis 상태 확인용 버튼 -->
   <h2>서버 상태</h2>
@@ -54,6 +65,17 @@
       }
     }
 
+    // 현재 닉네임 표시 갱신
+    function showCurrentNickname() {
+      var nickname = loadNickname();
+      var label = document.getElementById("current-nickname");
+      if (nickname === "") {
+        label.textContent = "없음";
+      } else {
+        label.textContent = nickname;
+      }
+    }
+
     // 입장 버튼: 닉네임 검사 후 저장하고 추천 화면으로 이동
     function enter() {
       var input = document.getElementById("nickname");
@@ -75,6 +97,17 @@
       window.location.href = "recommend.html";
     }
 
+    // 메뉴 링크 클릭 시 닉네임이 없으면 이동을 막고 안내
+    function checkNicknameBeforeMove(event) {
+      if (loadNickname() === "") {
+        // 링크 기본 동작(페이지 이동)을 취소
+        event.preventDefault();
+        document.getElementById("menu-message").textContent = "닉네임을 먼저 입력하고 [입장]을 눌러주세요.";
+        // 입력칸으로 커서를 옮겨서 바로 입력할 수 있게 함
+        document.getElementById("nickname").focus();
+      }
+    }
+
     // 서버 상태 확인 버튼
     function checkHealth() {
       var output = document.getElementById("health-result");
@@ -90,8 +123,21 @@
         });
     }
 
-    // 이전에 입장한 닉네임이 있으면 입력칸에 미리 채워둠
+    // 다른 화면에서 닉네임이 없어 돌아온 경우(주소에 ?need=nickname) 안내 표시
+    var params = new URLSearchParams(window.location.search);
+    if (params.get("need") === "nickname") {
+      document.getElementById("need-notice").className = "notice";
+    }
+
+    // 닉네임이 필요한 메뉴 링크마다 클릭 검사 연결
+    var protectedLinks = document.querySelectorAll("a.need-nickname");
+    for (var i = 0; i < protectedLinks.length; i++) {
+      protectedLinks[i].addEventListener("click", checkNicknameBeforeMove);
+    }
+
+    // 이전에 입장한 닉네임이 있으면 입력칸에 미리 채워두고 현재 닉네임 표시
     document.getElementById("nickname").value = loadNickname();
+    showCurrentNickname();
 
     document.getElementById("enter-btn").addEventListener("click", enter);
     document.getElementById("health-btn").addEventListener("click", checkHealth);
