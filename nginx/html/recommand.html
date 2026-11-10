@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>시간표 추천</title>
+  <style>
+    body { font-family: sans-serif; max-width: 900px; margin: 0 auto; padding: 16px; }
+    fieldset { margin-bottom: 12px; }
+    .message { margin: 12px 0; font-weight: bold; }
+    .error { color: #c0392b; }
+    .combination { border: 1px solid #ccc; border-radius: 8px; padding: 12px; margin-bottom: 16px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+    th, td { border: 1px solid #ddd; text-align: center; padding: 4px; font-size: 13px; height: 28px; }
+    td.filled { background: #dbe8ff; }
+  </style>
+</head>
+<body>
+  <h1>시간표 추천</h1>
+  <a href="index.html">처음으로</a>
+
+  <!-- 추천 조건 입력 -->
+  <fieldset>
+    <legend>목표 학점</legend>
+    <input type="number" id="target-credit" value="15" min="2" max="21">
+  </fieldset>
+
+  <fieldset>
+    <legend>공강 요일</legend>
+    <label><input type="checkbox" name="off-day" value="월"> 월</label>
+    <label><input type="checkbox" name="off-day" value="화"> 화</label>
+    <label><input type="checkbox" name="off-day" value="수"> 수</label>
+    <label><input type="checkbox" name="off-day" value="목"> 목</label>
+    <label><input type="checkbox" name="off-day" value="금"> 금</label>
+  </fieldset>
+
+  <fieldset>
+    <legend>기타 조건</legend>
+    <label><input type="checkbox" id="no-morning"> 오전 수업 제외 (1~3교시)</label>
+  </fieldset>
+
+  <button id="recommend-btn">추천받기</button>
+
+  <!-- 결과 표시 영역 -->
+  <div id="message" class="message"></div>
+  <div id="result"></div>
+
+  <script>
+    var DAYS = ["월", "화", "수", "목", "금"];
+    var MAX_PERIOD = 9;
+
+    // 체크된 공강 요일만 배열로 모음
+    function getCheckedOffDays() {
+      var boxes = document.querySelectorAll("input[name=off-day]");
+      var days = [];
+      for (var i = 0; i < boxes.length; i++) {
+        if (boxes[i].checked) {
+          days.push(boxes[i].value);
+        }
+      }
+      return days;
+    }
+
+    // 특정 요일·교시에 수업이 있는 과목을 찾아 이름을 반환 (없으면 빈 문자열)
+    function findCourseName(courses, day, period) {
+      for (var i = 0; i < courses.length; i++) {
+        var times = courses[i].times;
+        for (var j = 0; j < times.length; j++) {
+          if (times[j].day === day && times[j].start <= period && period <= times[j].end) {
+            return courses[i].name;
+          }
+        }
+      }
+      return "";
+    }
+
+    // 조합 하나를 요일 x 교시 표로 그림
+    function createTimetable(courses) {
+      var table = document.createElement("table");
+
+      // 머리글 줄: 교시, 월, 화, 수, 목, 금
+      var headerRow = document.createElement("tr");
+      var corner = document.createElement("th");
+      corner.textContent = "교시";
+      headerRow.appendChild(corner);
+      for (var d = 0; d < DAYS.length; d++) {
+        var dayHeader = document.createElement("th");
+        dayHeader.textContent = DAYS[d];
+        headerRow.appendChild(dayHeader);
+      }
+      table.appendChild(headerRow);
+
+      // 1~9교시 줄
+      for (var period = 1; period <= MAX_PERIOD; period++) {
+        var row = document.createElement("tr");
+        var periodCell = document.createElement("th");
+        periodCell.textContent = period;
+        row.appendChild(periodCell);
+
+        for (var k = 0; k < DAYS.length; k++) {
+          var cell = document.createElement("td");
+          var name = findCourseName(courses, DAYS[k], period);
+          if (name !== "") {
+            cell.textContent = name;
+            cell.className = "filled";
+          }
+          row.appendChild(cell);
+        }
+        table.appendChild(row);
+      }
+      return table;
+    }
+
+    // 추천 결과 전체를 화면에 표시
+    function renderResult(data) {
+      var resultArea = document.getElementById("result");
+      resultArea.innerHTML = "";
+
+      for (var i = 0; i < data.combinations.length; i++) {
+        var combination = data.combinations[i];
+
+        var box = document.createElement("div");
+        box.className = "combination";
+
+        var title = document.createElement("h3");
+        title.textContent = "추천 " + (i + 1) + " (총 " + combination.totalCredit + "학점)";
+        box.appendChild(title);
+
+        // 과목 이름 목록
+        var list = document.createElement("ul");
+        for (var j = 0; j < combination.courses.length; j++) {
+          var course = combination.courses[j];
+          var li = document.createElement("li");
+          li.textContent = course.name + " (" + course.credit + "학점)";
+          list.appendChild(li);
+        }
+        box.appendChild(list);
+
+        // 시간표 표
+        box.appendChild(createTimetable(combination.courses));
+        resultArea.appendChild(box);
+      }
+    }
+
+    // 메시지 표시 (오류면 빨간색)
+    function showMessage(text, isError) {
+      var messageArea = document.getElementById("message");
+      messageArea.textContent = text;
+      if (isError) {
+        messageArea.className = "message error";
+      } else {
+        messageArea.className = "message";
+      }
+    }
+
+    // 추천받기 버튼 클릭 시 서버에 요청
+    function requestRecommend() {
+      var body = {
+        targetCredit: Number(document.getElementById("target-credit").value),
+        offDays: getCheckedOffDays(),
+        noMorning: document.getElementById("no-morning").checked
+      };
+
+      fetch("/api/recommend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      })
+        .then(function (response) {
+          // 상태 코드와 본문을 함께 넘기기 위해 묶어서 반환
+          return response.json().then(function (data) {
+            return { ok: response.ok, data: data };
+          });
+        })
+        .then(function (result) {
+          // 400 오류: 입력값 문제
+          if (!result.ok) {
+            document.getElementById("result").innerHTML = "";
+            showMessage(result.data.message, true);
+            return;
+          }
+          // 조합이 없으면 안내만, 있으면 결과 표시
+          showMessage(result.data.message, result.data.count === 0);
+          renderResult(result.data);
+        })
+        .catch(function (error) {
+          showMessage("서버에 연결할 수 없습니다: " + error, true);
+        });
+    }
+
+    document.getElementById("recommend-btn").addEventListener("click", requestRecommend);
+  </script>
+</body>
+</html>
