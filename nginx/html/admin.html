@@ -1,125 +1,323 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ko">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>관리자</title>
-  <style>
-    body { font-family: sans-serif; max-width: 900px; margin: 0 auto; padding: 16px; }
-    fieldset { margin-bottom: 16px; }
-    fieldset:disabled { opacity: 0.5; }
-    .status { font-size: 20px; font-weight: bold; margin: 8px 0; }
-    .message { margin: 8px 0; }
-    .error { color: #c0392b; font-weight: bold; }
-    .verified { color: #1e7b34; font-weight: bold; }
-  </style>
-</head>
-<body>
-  <h1>관리자</h1>
-  <p><a href="index.html">처음으로</a></p>
-
-  <!-- 관리자 키 확인: 맞아야 아래 기능이 열림 -->
-  <fieldset>
-    <legend>관리자 인증</legend>
-    <input type="password" id="admin-key" placeholder="관리자 키">
-    <button id="verify-btn">확인</button>
-    <div id="verify-message" class="message">관리자 키를 입력하고 [확인]을 눌러주세요.</div>
-  </fieldset>
-
-  <!-- 신청 오픈·마감·초기화 (인증 전에는 disabled로 잠김) -->
-  <fieldset id="manage-section" disabled>
-    <legend>신청 관리</legend>
-    <div id="status" class="status">상태 확인 중...</div>
-    <label>오픈까지 대기 시간(초, 0~60): <input type="number" id="delay" value="10" min="0" max="60"></label>
-    <br><br>
-    <button id="open-btn">오픈</button>
-    <button id="close-btn">마감</button>
-    <button id="reset-btn">초기화 (정원·신청 내역)</button>
-    <div id="admin-message" class="message"></div>
-  </fieldset>
-
-  <script>
-    // 인증에 성공한 관리자 키 (인증 전이면 빈 문자열)
-    var verifiedKey = "";
-
-    // 서버에 요청을 보내고 { ok, data } 형태로 결과를 돌려줌
-    function sendRequest(method, url, body) {
-      var options = { method: method, headers: { "Content-Type": "application/json" } };
-      if (body !== null) {
-        options.body = JSON.stringify(body);
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>관리자</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 16px;
       }
-      return fetch(url, options).then(function (response) {
-        return response.json().then(function (data) {
-          return { ok: response.ok, data: data };
+      fieldset {
+        margin-bottom: 16px;
+      }
+      fieldset:disabled {
+        opacity: 0.5;
+      }
+      .status {
+        font-size: 20px;
+        font-weight: bold;
+        margin: 8px 0;
+      }
+      .message {
+        margin: 8px 0;
+      }
+      .error {
+        color: #c0392b;
+        font-weight: bold;
+      }
+      .verified {
+        color: #1e7b34;
+        font-weight: bold;
+      }
+      /* 실시간 현황: 숫자 요약 */
+      .cards {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .card {
+        flex: 1;
+        min-width: 130px;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 10px;
+        text-align: center;
+      }
+      .card-value {
+        font-size: 26px;
+        font-weight: bold;
+      }
+      .card-label {
+        font-size: 13px;
+        color: #555;
+      }
+      /* 실시간 현황: 초당 요청 수 그래프 (막대 60개를 아래쪽에 맞춰 나란히 세움) */
+      .chart {
+        display: flex;
+        align-items: flex-end;
+        height: 160px;
+        border-left: 1px solid #999;
+        border-bottom: 1px solid #999;
+        padding-top: 4px;
+      }
+      .chart-bar {
+        flex: 1;
+        margin: 0 1px;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        height: 100%;
+      }
+      .part-success {
+        background: #2e9e4f;
+      }
+      .part-full {
+        background: #d9534f;
+      }
+      .part-other {
+        background: #aaa;
+      }
+      .chart-axis {
+        display: flex;
+        justify-content: space-between;
+        font-size: 12px;
+        color: #555;
+      }
+      .legend {
+        font-size: 13px;
+        margin-top: 4px;
+      }
+      .legend span {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        margin: 0 4px 0 12px;
+        vertical-align: middle;
+      }
+      /* 실시간 현황: 워커별 막대 */
+      .bar-row {
+        display: flex;
+        align-items: center;
+        margin: 4px 0;
+        font-size: 14px;
+      }
+      .bar-label {
+        width: 260px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .bar {
+        height: 18px;
+        background: #4a7bd1;
+        margin: 0 8px;
+      }
+      /* 실시간 현황: 과목별 남은 자리 */
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        margin-top: 8px;
+      }
+      th,
+      td {
+        border: 1px solid #ddd;
+        text-align: center;
+        padding: 4px;
+        font-size: 13px;
+        height: 28px;
+      }
+      .seat-track {
+        width: 100%;
+        height: 14px;
+        background: #eee;
+      }
+      .seat-fill {
+        height: 14px;
+        background: #4a7bd1;
+      }
+      .seat-fill.closed-seat {
+        background: #d9534f;
+      }
+      .closed-text {
+        color: #c0392b;
+        font-weight: bold;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>관리자</h1>
+    <p><a href="index.html">처음으로</a></p>
+
+    <!-- 관리자 키 확인: 맞아야 아래 기능이 열림 -->
+    <fieldset>
+      <legend>관리자 인증</legend>
+      <input type="password" id="admin-key" placeholder="관리자 키" />
+      <button id="verify-btn">확인</button>
+      <div id="verify-message" class="message">
+        관리자 키를 입력하고 [확인]을 눌러주세요.
+      </div>
+    </fieldset>
+
+    <!-- 신청 오픈·마감·초기화 (인증 전에는 disabled로 잠김) -->
+    <fieldset id="manage-section" disabled>
+      <legend>신청 관리</legend>
+      <div id="status" class="status">상태 확인 중...</div>
+      <label
+        >오픈까지 대기 시간(초, 0~60):
+        <input type="number" id="delay" value="10" min="0" max="60"
+      /></label>
+      <br /><br />
+      <button id="open-btn">오픈</button>
+      <button id="close-btn">마감</button>
+      <button id="reset-btn">초기화 (정원·신청 내역)</button>
+      <div id="admin-message" class="message"></div>
+    </fieldset>
+
+    <!-- 실시간 현황 (인증 전에는 잠김, 인증 후 1초마다 갱신) -->
+    <fieldset id="live-section" disabled>
+      <legend>실시간 현황</legend>
+      <div id="live-message" class="message">관리자 인증 후 표시됩니다.</div>
+
+      <!-- 숫자 요약 -->
+      <div class="cards">
+        <div class="card">
+          <div class="card-value" id="card-now">0</div>
+          <div class="card-label">직전 1초 요청 수</div>
+        </div>
+        <div class="card">
+          <div class="card-value" id="card-peak">0</div>
+          <div class="card-label">최근 60초 최고 (초당)</div>
+        </div>
+        <div class="card">
+          <div class="card-value" id="card-total">0</div>
+          <div class="card-label">누적 신청 요청</div>
+        </div>
+        <div class="card">
+          <div class="card-value" id="card-success">0</div>
+          <div class="card-label">누적 성공</div>
+        </div>
+        <div class="card">
+          <div class="card-value" id="card-full">0</div>
+          <div class="card-label">누적 정원 마감</div>
+        </div>
+      </div>
+
+      <!-- 초당 요청 수 그래프 -->
+      <h3>초당 신청 요청 수 (최근 60초)</h3>
+      <div id="chart" class="chart"></div>
+      <div class="chart-axis">
+        <span>60초 전</span><span>30초 전</span><span>지금</span>
+      </div>
+      <div class="legend">
+        <span class="part-success"></span>성공
+        <span class="part-full"></span>정원 마감
+        <span class="part-other"></span>그 외 (오픈 전, 중복 등)
+      </div>
+
+      <!-- 워커별 처리 건수 -->
+      <h3>요청을 처리한 위치 (서버 / 워커)</h3>
+      <div id="workers"></div>
+
+      <!-- 과목별 남은 자리 -->
+      <h3>과목별 신청 현황</h3>
+      <div id="courses"></div>
+    </fieldset>
+
+    <script>
+      var CHART_HEIGHT = 156; // 그래프 막대의 최대 높이(px)
+
+      // 인증에 성공한 관리자 키 (인증 전이면 빈 문자열)
+      var verifiedKey = "";
+
+      // 서버에 요청을 보내고 { ok, data } 형태로 결과를 돌려줌
+      function sendRequest(method, url, body) {
+        var options = {
+          method: method,
+          headers: { "Content-Type": "application/json" },
+        };
+        if (body !== null) {
+          options.body = JSON.stringify(body);
+        }
+        return fetch(url, options).then(function (response) {
+          return response.json().then(function (data) {
+            return { ok: response.ok, data: data };
+          });
         });
-      });
-    }
-
-    // 관리 기능 잠금 / 해제
-    // fieldset에 disabled를 주면 그 안의 입력칸과 버튼이 모두 비활성화됨
-    function setLocked(locked) {
-      document.getElementById("manage-section").disabled = locked;
-    }
-
-    // 인증 메시지 표시 (className으로 색상 결정)
-    function showVerifyMessage(text, className) {
-      var area = document.getElementById("verify-message");
-      area.textContent = text;
-      area.className = "message " + className;
-    }
-
-    // [확인] 버튼: 서버에 키가 맞는지 물어봄
-    function verifyAdmin() {
-      var key = document.getElementById("admin-key").value;
-
-      if (key === "") {
-        showVerifyMessage("관리자 키를 입력해주세요.", "error");
-        return;
       }
 
-      sendRequest("POST", "/api/admin/verify", { adminKey: key })
-        .then(function (result) {
-          if (result.ok) {
-            // 맞으면 키를 기억하고 관리 기능 잠금 해제
-            verifiedKey = key;
-            setLocked(false);
-            showVerifyMessage("관리자 인증 완료", "verified");
-          } else {
-            // 틀리면 잠금 유지
-            verifiedKey = "";
-            setLocked(true);
-            showVerifyMessage(result.data.message, "error");
-          }
-        })
-        .catch(function (error) {
-          showVerifyMessage("서버에 연결할 수 없습니다: " + error, "error");
-        });
-    }
-
-    // 인증 후 키 입력칸을 고치면 다시 잠금 (다시 확인해야 함)
-    function onKeyInputChanged() {
-      if (verifiedKey !== "") {
-        verifiedKey = "";
-        setLocked(true);
-        showVerifyMessage("키가 바뀌었습니다. 다시 [확인]을 눌러주세요.", "");
+      // 관리 기능 잠금 / 해제
+      // fieldset에 disabled를 주면 그 안의 입력칸과 버튼이 모두 비활성화됨
+      function setLocked(locked) {
+        document.getElementById("manage-section").disabled = locked;
+        document.getElementById("live-section").disabled = locked;
+        if (locked) {
+          document.getElementById("live-message").textContent =
+            "관리자 인증 후 표시됩니다.";
+        }
       }
-    }
 
-    // 관리 결과 메시지 표시 (오류면 빨간색)
-    function showAdminMessage(text, isError) {
-      var area = document.getElementById("admin-message");
-      area.textContent = text;
-      if (isError) {
-        area.className = "message error";
-      } else {
-        area.className = "message";
+      // 인증 메시지 표시 (className으로 색상 결정)
+      function showVerifyMessage(text, className) {
+        var area = document.getElementById("verify-message");
+        area.textContent = text;
+        area.className = "message " + className;
       }
-    }
 
-    // 신청 상태 표시 (1초마다 갱신)
-    function loadStatus() {
-      sendRequest("GET", "/api/status", null)
-        .then(function (result) {
+      // [확인] 버튼: 서버에 키가 맞는지 물어봄
+      function verifyAdmin() {
+        var key = document.getElementById("admin-key").value;
+
+        if (key === "") {
+          showVerifyMessage("관리자 키를 입력해주세요.", "error");
+          return;
+        }
+
+        sendRequest("POST", "/api/admin/verify", { adminKey: key })
+          .then(function (result) {
+            if (result.ok) {
+              // 맞으면 키를 기억하고 관리 기능 잠금 해제
+              verifiedKey = key;
+              setLocked(false);
+              showVerifyMessage("관리자 인증 완료", "verified");
+            } else {
+              // 틀리면 잠금 유지
+              verifiedKey = "";
+              setLocked(true);
+              showVerifyMessage(result.data.message, "error");
+            }
+          })
+          .catch(function (error) {
+            showVerifyMessage("서버에 연결할 수 없습니다: " + error, "error");
+          });
+      }
+
+      // 인증 후 키 입력칸을 고치면 다시 잠금 (다시 확인해야 함)
+      function onKeyInputChanged() {
+        if (verifiedKey !== "") {
+          verifiedKey = "";
+          setLocked(true);
+          showVerifyMessage("키가 바뀌었습니다. 다시 [확인]을 눌러주세요.", "");
+        }
+      }
+
+      // 관리 결과 메시지 표시 (오류면 빨간색)
+      function showAdminMessage(text, isError) {
+        var area = document.getElementById("admin-message");
+        area.textContent = text;
+        if (isError) {
+          area.className = "message error";
+        } else {
+          area.className = "message";
+        }
+      }
+
+      // 신청 상태 표시 (1초마다 갱신)
+      function loadStatus() {
+        sendRequest("GET", "/api/status", null).then(function (result) {
           var data = result.data;
           var text = "";
           if (data.state === "open") {
@@ -131,49 +329,260 @@
           }
           document.getElementById("status").textContent = text;
         });
-    }
+      }
 
-    // 관리자 API 공통 호출 (인증된 키를 함께 보냄)
-    function callAdmin(url, body) {
-      sendRequest("POST", url, body)
-        .then(function (result) {
-          showAdminMessage(result.data.message, !result.ok);
-          loadStatus();
-        })
-        .catch(function (error) {
-          showAdminMessage("서버에 연결할 수 없습니다: " + error, true);
+      // 관리자 API 공통 호출 (인증된 키를 함께 보냄)
+      function callAdmin(url, body) {
+        sendRequest("POST", url, body)
+          .then(function (result) {
+            showAdminMessage(result.data.message, !result.ok);
+            loadStatus();
+          })
+          .catch(function (error) {
+            showAdminMessage("서버에 연결할 수 없습니다: " + error, true);
+          });
+      }
+
+      function openEnroll() {
+        callAdmin("/api/admin/open", {
+          adminKey: verifiedKey,
+          delaySeconds: Number(document.getElementById("delay").value),
         });
-    }
-
-    function openEnroll() {
-      callAdmin("/api/admin/open", { adminKey: verifiedKey, delaySeconds: Number(document.getElementById("delay").value) });
-    }
-
-    function closeEnroll() {
-      callAdmin("/api/admin/close", { adminKey: verifiedKey });
-    }
-
-    function resetEnroll() {
-      if (!confirm("모든 정원과 신청 내역을 초기화할까요?")) {
-        return;
       }
-      callAdmin("/api/admin/reset", { adminKey: verifiedKey });
-    }
 
-    document.getElementById("verify-btn").addEventListener("click", verifyAdmin);
-    document.getElementById("admin-key").addEventListener("input", onKeyInputChanged);
-    // 키 입력칸에서 Enter를 눌러도 확인되게 함
-    document.getElementById("admin-key").addEventListener("keydown", function (event) {
-      if (event.key === "Enter") {
-        verifyAdmin();
+      function closeEnroll() {
+        callAdmin("/api/admin/close", { adminKey: verifiedKey });
       }
-    });
-    document.getElementById("open-btn").addEventListener("click", openEnroll);
-    document.getElementById("close-btn").addEventListener("click", closeEnroll);
-    document.getElementById("reset-btn").addEventListener("click", resetEnroll);
 
-    loadStatus();
-    setInterval(loadStatus, 1000);
-  </script>
-</body>
+      function resetEnroll() {
+        if (!confirm("모든 정원과 신청 내역을 초기화할까요?")) {
+          return;
+        }
+        callAdmin("/api/admin/reset", { adminKey: verifiedKey });
+      }
+
+      // ---------------- 실시간 현황 ----------------
+
+      // 서버에서 현황을 가져옴 (인증된 경우에만, 1초마다 호출)
+      function loadStats() {
+        // 인증 전에는 요청하지 않음
+        if (verifiedKey === "") {
+          return;
+        }
+
+        sendRequest("POST", "/api/admin/stats", { adminKey: verifiedKey })
+          .then(function (result) {
+            if (!result.ok) {
+              document.getElementById("live-message").textContent =
+                result.data.message;
+              return;
+            }
+            var data = result.data;
+            document.getElementById("live-message").textContent =
+              "1초마다 자동으로 갱신됩니다.";
+            renderCards(data);
+            renderChart(data.seconds);
+            renderWorkers(data.workers, data.totals.requests);
+            renderCourses(data.courses);
+          })
+          .catch(function (error) {
+            document.getElementById("live-message").textContent =
+              "서버에 연결할 수 없습니다.";
+          });
+      }
+
+      // 숫자 요약 표시
+      function renderCards(data) {
+        var seconds = data.seconds;
+
+        // 마지막 칸(지금 이 순간의 1초)은 아직 다 지나지 않았으므로, 그 앞 칸을 "직전 1초"로 씀
+        var lastFull = seconds[seconds.length - 2].requests;
+
+        // 최근 60초 중 가장 요청이 많았던 1초
+        var peak = 0;
+        for (var i = 0; i < seconds.length; i++) {
+          if (seconds[i].requests > peak) {
+            peak = seconds[i].requests;
+          }
+        }
+
+        document.getElementById("card-now").textContent = lastFull;
+        document.getElementById("card-peak").textContent = peak;
+        document.getElementById("card-total").textContent =
+          data.totals.requests;
+        document.getElementById("card-success").textContent =
+          data.totals.success;
+        document.getElementById("card-full").textContent = data.totals.full;
+      }
+
+      // 막대의 한 부분(성공 / 마감 / 그 외)을 만듦
+      function createPart(className, count, maxCount) {
+        var part = document.createElement("div");
+        part.className = className;
+        part.style.height =
+          Math.round((count / maxCount) * CHART_HEIGHT) + "px";
+        return part;
+      }
+
+      // 초당 요청 수 그래프: 1초에 막대 하나, 왼쪽이 60초 전이고 오른쪽이 지금
+      function renderChart(seconds) {
+        var chart = document.getElementById("chart");
+        chart.innerHTML = "";
+
+        // 가장 큰 값을 막대 최대 높이에 맞춤 (요청이 없을 때 0으로 나누지 않도록 최소 1)
+        var maxCount = 1;
+        for (var i = 0; i < seconds.length; i++) {
+          if (seconds[i].requests > maxCount) {
+            maxCount = seconds[i].requests;
+          }
+        }
+
+        for (var j = 0; j < seconds.length; j++) {
+          var second = seconds[j];
+          var other = second.requests - second.success - second.full;
+
+          var bar = document.createElement("div");
+          bar.className = "chart-bar";
+          // 마우스를 올리면 그 초의 숫자를 보여줌
+          bar.title =
+            second.secondsAgo +
+            "초 전: 요청 " +
+            second.requests +
+            "건 (성공 " +
+            second.success +
+            ", 마감 " +
+            second.full +
+            ")";
+
+          // 위에서부터 그 외, 마감, 성공 순으로 쌓음
+          bar.appendChild(createPart("part-other", other, maxCount));
+          bar.appendChild(createPart("part-full", second.full, maxCount));
+          bar.appendChild(createPart("part-success", second.success, maxCount));
+          chart.appendChild(bar);
+        }
+      }
+
+      // 워커별 처리 건수: 요청이 워커들에게 나뉘어 처리되는 모습
+      function renderWorkers(workers, totalRequests) {
+        var area = document.getElementById("workers");
+        area.innerHTML = "";
+
+        if (workers.length === 0) {
+          area.textContent = "아직 신청 요청이 없습니다.";
+          return;
+        }
+
+        for (var i = 0; i < workers.length; i++) {
+          var row = document.createElement("div");
+          row.className = "bar-row";
+
+          var label = document.createElement("span");
+          label.className = "bar-label";
+          label.textContent = workers[i].name;
+          row.appendChild(label);
+
+          // 막대 길이: 전체 요청 대비 비율 (최대 300px)
+          var bar = document.createElement("div");
+          bar.className = "bar";
+          var width = 0;
+          if (totalRequests > 0) {
+            width = Math.round((workers[i].count / totalRequests) * 300);
+          }
+          bar.style.width = width + "px";
+          row.appendChild(bar);
+
+          var text = document.createElement("span");
+          text.textContent = workers[i].count + "건";
+          row.appendChild(text);
+
+          area.appendChild(row);
+        }
+      }
+
+      // 표에 칸 하나를 추가
+      function appendCell(row, tagName, text) {
+        var cell = document.createElement(tagName);
+        cell.textContent = text;
+        row.appendChild(cell);
+        return cell;
+      }
+
+      // 과목별 남은 자리: 자리가 찬 만큼 막대가 채워지고, 마감되면 빨간색
+      function renderCourses(courses) {
+        var area = document.getElementById("courses");
+        area.innerHTML = "";
+
+        var table = document.createElement("table");
+        var header = document.createElement("tr");
+        appendCell(header, "th", "과목");
+        appendCell(header, "th", "정원");
+        appendCell(header, "th", "신청 인원");
+        appendCell(header, "th", "남은 자리");
+        appendCell(header, "th", "채워진 정도");
+        table.appendChild(header);
+
+        for (var i = 0; i < courses.length; i++) {
+          var course = courses[i];
+          var enrolled = course.capacity - course.remaining;
+
+          var row = document.createElement("tr");
+          appendCell(row, "td", course.name);
+          appendCell(row, "td", course.capacity);
+          appendCell(row, "td", enrolled);
+
+          var remainingCell = appendCell(row, "td", course.remaining);
+          if (course.remaining === 0) {
+            remainingCell.textContent = "마감";
+            remainingCell.className = "closed-text";
+          }
+
+          // 채워진 정도 막대
+          var barCell = document.createElement("td");
+          barCell.style.width = "40%";
+          var track = document.createElement("div");
+          track.className = "seat-track";
+          var fill = document.createElement("div");
+          fill.className = "seat-fill";
+          if (course.remaining === 0) {
+            fill.className = "seat-fill closed-seat";
+          }
+          fill.style.width =
+            Math.round((enrolled / course.capacity) * 100) + "%";
+          track.appendChild(fill);
+          barCell.appendChild(track);
+          row.appendChild(barCell);
+
+          table.appendChild(row);
+        }
+
+        area.appendChild(table);
+      }
+
+      document
+        .getElementById("verify-btn")
+        .addEventListener("click", verifyAdmin);
+      document
+        .getElementById("admin-key")
+        .addEventListener("input", onKeyInputChanged);
+      // 키 입력칸에서 Enter를 눌러도 확인되게 함
+      document
+        .getElementById("admin-key")
+        .addEventListener("keydown", function (event) {
+          if (event.key === "Enter") {
+            verifyAdmin();
+          }
+        });
+      document.getElementById("open-btn").addEventListener("click", openEnroll);
+      document
+        .getElementById("close-btn")
+        .addEventListener("click", closeEnroll);
+      document
+        .getElementById("reset-btn")
+        .addEventListener("click", resetEnroll);
+
+      loadStatus();
+      setInterval(loadStatus, 1000);
+      setInterval(loadStats, 1000);
+    </script>
+  </body>
 </html>

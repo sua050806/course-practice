@@ -46,6 +46,12 @@ NICKNAME_MAX_LENGTH = 10    # 닉네임 최대 글자 수
 OPEN_AT_KEY = "enroll:open_at"  # 오픈 시각을 저장하는 Redis 키
 MAX_OPEN_DELAY = 60             # 관리자가 설정할 수 있는 최대 오픈 대기 시간(초)
 
+# 실시간 현황(트래픽 통계)에 쓰는 상수
+STATS_WINDOW_SECONDS = 60           # 현황 화면에 보여줄 최근 구간(초)
+STATS_KEEP_SECONDS = 180            # 초 단위 기록을 Redis에 보관하는 시간(초)
+STATS_TOTAL_KEY = "stats:total"     # 누적 요청 수를 저장하는 Redis 키
+STATS_WORKER_KEY = "stats:worker"   # 워커별 처리 건수를 저장하는 Redis 키
+
 
 def load_courses():
     # 과목 정보(이름, 학점, 시간, 정원)를 파일에서 읽어옴
@@ -272,9 +278,57 @@ def get_open_state():
     return state
 
 
+def get_stats_second_key(second):
+    # 초 단위 요청 기록을 저장하는 Redis 키 이름
+    # 예: stats:sec:1794832800 (유닉스 시간의 초)
+    return "stats:sec:" + str(second)
+
+
+def record_enroll_stat(result):
+    # 수강신청 요청 1건을 실시간 현황용 통계에 기록
+    # 모든 워커가 같은 Redis에 기록하므로, 어느 워커가 처리했든 한 곳에 합쳐짐
+    second_key = get_stats_second_key(int(time.time()))
+    worker_name = SERVER_NAME + " / 워커 " + str(os.getpid())
+
+    # 결과를 성공 / 정원 마감 / 그 외 세 가지로 나눠서 셈
+    kind = "other"
+    if result == "success":
+        kind = "success"
+    if result == "full":
+        kind = "full"
+
+    try:
+        # pipeline: 여러 명령을 모아서 Redis에 한 번에 보냄 (왕복 횟수를 줄임)
+        # hincrby: Hash 안의 숫자 칸을 1 올리는 명령 (DECR처럼 한 번에 처리돼서 동시에 와도 정확함)
+        pipe = redis_client.pipeline()
+        pipe.hincrby(second_key, "requests", 1)
+        pipe.hincrby(second_key, kind, 1)
+        # 초 단위 기록은 시간이 지나면 필요 없으므로 자동으로 지워지게 함
+        pipe.expire(second_key, STATS_KEEP_SECONDS)
+        pipe.hincrby(STATS_TOTAL_KEY, "requests", 1)
+        pipe.hincrby(STATS_TOTAL_KEY, kind, 1)
+        pipe.hincrby(STATS_WORKER_KEY, worker_name, 1)
+        pipe.execute()
+    except Exception:
+        # 통계 기록에 실패해도 수강신청 자체는 정상 처리되게 함
+        return
+
+
+def read_stat_count(stat_hash, field):
+    # Redis Hash에서 꺼낸 값(문자열)을 숫자로 바꿈. 칸이 없으면 0
+    value = stat_hash.get(field)
+    if value is None:
+        return 0
+    return int(value)
+
+
 def make_enroll_result(result, message, status_code, course_id, remaining):
     # 수강신청 응답을 같은 형식으로 만듦
     # 성공·실패 모두 처리한 서버와 워커 번호를 넣어서 부하 테스트에서 분포를 집계할 수 있게 함
+
+    # 모든 수강신청 응답이 이 함수를 거치므로 여기서 통계를 기록
+    record_enroll_stat(result)
+
     body = {}
     body["result"] = result         # success, full, not_open, duplicate, conflict, credit_over, invalid
     body["message"] = message
@@ -586,6 +640,71 @@ def my_enrollments():
     return make_course_list_response(nickname, enrolled_courses, message)
 
 
+@app.route("/api/admin/stats", methods=["POST"])
+def admin_stats():
+    # 관리자: 실시간 현황 조회 (관리자 화면이 1초마다 호출)
+    # 최근 60초의 초당 요청 수, 누적 요청 수, 워커별 처리 건수, 과목별 남은 자리를 반환
+    # 요청 예시: {"adminKey": "admin1234"}
+    data = request.get_json(silent=True)
+    if not is_admin(data):
+        return make_error("관리자 키가 올바르지 않습니다.", 403)
+
+    now_second = int(time.time())
+
+    # 1. 최근 60초의 초 단위 기록을 한 번에 조회
+    pipe = redis_client.pipeline()
+    offset = STATS_WINDOW_SECONDS - 1
+    while offset >= 0:
+        pipe.hgetall(get_stats_second_key(now_second - offset))
+        offset = offset - 1
+    second_hashes = pipe.execute()
+
+    # 2. 오래된 초부터 순서대로 정리 (secondsAgo: 몇 초 전인지, 0이면 지금)
+    seconds = []
+    index = 0
+    while index < len(second_hashes):
+        item = {}
+        item["secondsAgo"] = STATS_WINDOW_SECONDS - 1 - index
+        item["requests"] = read_stat_count(second_hashes[index], "requests")
+        item["success"] = read_stat_count(second_hashes[index], "success")
+        item["full"] = read_stat_count(second_hashes[index], "full")
+        seconds.append(item)
+        index = index + 1
+
+    # 3. 누적 요청 수 (초기화 이후 전체)
+    total_hash = redis_client.hgetall(STATS_TOTAL_KEY)
+    totals = {}
+    totals["requests"] = read_stat_count(total_hash, "requests")
+    totals["success"] = read_stat_count(total_hash, "success")
+    totals["full"] = read_stat_count(total_hash, "full")
+
+    # 4. 워커별 처리 건수 (이름순으로 정렬해서 화면 순서가 바뀌지 않게 함)
+    worker_hash = redis_client.hgetall(STATS_WORKER_KEY)
+    workers = []
+    for worker_name in sorted(worker_hash.keys()):
+        worker_item = {}
+        worker_item["name"] = worker_name
+        worker_item["count"] = int(worker_hash[worker_name])
+        workers.append(worker_item)
+
+    # 5. 과목별 정원과 남은 자리
+    course_items = []
+    for course in courses:
+        course_item = {}
+        course_item["id"] = course["id"]
+        course_item["name"] = course["name"]
+        course_item["capacity"] = course["capacity"]
+        course_item["remaining"] = get_remaining(course)
+        course_items.append(course_item)
+
+    result = get_open_state()
+    result["seconds"] = seconds
+    result["totals"] = totals
+    result["workers"] = workers
+    result["courses"] = course_items
+    return jsonify(result)
+
+
 @app.route("/api/admin/open", methods=["POST"])
 def admin_open():
     # 관리자: N초 후 신청 오픈
@@ -650,5 +769,9 @@ def admin_reset():
     for key in redis_client.scan_iter("enrolled:*"):
         redis_client.delete(key)
         deleted_count = deleted_count + 1
+
+    # 4. 실시간 현황 통계 삭제 (초 단위 기록, 누적, 워커별이 모두 stats:로 시작)
+    for key in redis_client.scan_iter("stats:*"):
+        redis_client.delete(key)
 
     return make_admin_response("초기화했습니다. 신청 내역 " + str(deleted_count) + "명분을 삭제했습니다.")
